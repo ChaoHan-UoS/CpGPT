@@ -284,7 +284,7 @@ class DNALLMEmbedder:
         # Load genome
         if genome_file is None:
             genome_file = self._load_genome(species)
-        genome = Fasta(genome_file)
+        genome = Fasta(genome_file)  # load fasta file
 
         # Set up embedding files
         embeddings_dir = Path(self.dna_embeddings_dir) / species / dna_llm
@@ -303,7 +303,7 @@ class DNALLMEmbedder:
         model, tokenizer = self._load_dna_model(dna_llm)
 
         # Process genomic locations
-        self._process_genomic_locations(
+        embeddings = self._process_genomic_locations(
             genomic_locations,
             species,
             dna_llm,
@@ -317,7 +317,7 @@ class DNALLMEmbedder:
         )
 
         # Final save and cleanup
-        self._finalize_embeddings(species, dna_llm, dna_context_len, embeddings, embeddings_file)
+        self._finalize_embeddings(embeddings, embeddings_file)
 
         self.logger.info("DNA embeddings processed successfully.")
 
@@ -338,9 +338,7 @@ class DNALLMEmbedder:
 
         if dna_llm not in self.llm_embedding_size_dict:
             msg = f"dna_llm must be one of {self.llm_embedding_size_dict.keys()}, got {dna_llm}"
-            raise ValueError(
-                msg,
-            )
+            raise ValueError(msg)
 
     def _initialize_embeddings(
         self,
@@ -441,7 +439,7 @@ class DNALLMEmbedder:
         tokenizer: PreTrainedTokenizer,
         batch_size: int,
         num_workers: int,
-    ) -> None:
+    ) -> np.memmap:
         """Process genomic locations and generate embeddings.
 
         Args:
@@ -455,6 +453,9 @@ class DNALLMEmbedder:
             tokenizer (PreTrainedTokenizer): Associated tokenizer
             batch_size (int): Batch size for processing
             num_workers (int): Number of dataloader workers
+
+        Returns:
+            np.memmap: The (potentially resized) embeddings array
 
         Raises:
             ValueError: If input validation fails
@@ -490,9 +491,9 @@ class DNALLMEmbedder:
                     "genomic locations already processed. Skipping those.",
                 )
 
-            # Return nothing if everything has already been processed
+            # Return early if everything has already been processed
             if len(genomic_locations_to_process) == 0:
-                return
+                return embeddings
 
             # Create dataset
             dataset = GenomicSequenceDataset(genomic_locations_to_process, genome, dna_context_len)
@@ -511,10 +512,7 @@ class DNALLMEmbedder:
                 persistent_workers=num_workers > 0,
             )
 
-            with tqdm(
-                desc="Generating embeddings",
-                total=len(genomic_locations_to_process),
-            ) as pbar:
+            with tqdm(desc="Generating embeddings", total=len(genomic_locations_to_process)) as pbar:
                 for i, batch in enumerate(dataloader):
                     # Verify input data
                     if not isinstance(batch["input_ids"], torch.Tensor):
@@ -535,32 +533,18 @@ class DNALLMEmbedder:
                                 # Apply mask before mean
                                 masked_outputs = outputs[0] * attention_mask.unsqueeze(-1)
                                 batch_embeddings = (
-                                    (
-                                        masked_outputs.sum(dim=1)
-                                        / attention_mask.sum(dim=1, keepdim=True)
-                                    )
-                                    .cpu()
-                                    .numpy()
-                                )
+                                        masked_outputs.sum(dim=1) / attention_mask.sum(dim=1, keepdim=True)
+                                ).cpu().numpy()
                             else:
                                 outputs = model(input_ids, output_hidden_states=True)
                                 # Apply mask before mean
-                                masked_hidden = outputs.hidden_states[
-                                    -1
-                                ] * attention_mask.unsqueeze(-1)
+                                masked_hidden = outputs.hidden_states[-1] * attention_mask.unsqueeze(-1)
                                 batch_embeddings = (
-                                    (
-                                        masked_hidden.sum(dim=1)
-                                        / attention_mask.sum(dim=1, keepdim=True)
-                                    )
-                                    .cpu()
-                                    .numpy()
-                                )
+                                        masked_hidden.sum(dim=1) / attention_mask.sum(dim=1, keepdim=True)
+                                ).cpu().numpy()  # (bs, emb_dim)
 
                     except Exception:
-                        self.logger.exception(
-                            f"Failed to generate embeddings for batch {i}",
-                        )
+                        self.logger.exception(f"Failed to generate embeddings for batch {i}")
                         raise
 
                     # Verify embedding dimensions
@@ -574,9 +558,7 @@ class DNALLMEmbedder:
 
                     # Save embeddings with verification
                     try:
-                        current_size = len(
-                            self.ensembl_metadata_dict[species][dna_llm][dna_context_len],
-                        )
+                        current_size = len(self.ensembl_metadata_dict[species][dna_llm][dna_context_len])
                         batch_size = len(batch["locations"])
                         new_indices = np.arange(current_size, current_size + batch_size)
 
@@ -616,9 +598,7 @@ class DNALLMEmbedder:
 
                         # Update metadata with verification
                         for loc, idx in zip(batch["locations"], new_indices, strict=False):
-                            self.ensembl_metadata_dict[species][dna_llm][dna_context_len][loc] = (
-                                idx
-                            )
+                            self.ensembl_metadata_dict[species][dna_llm][dna_context_len][loc] = idx
                             processed_locations[loc] = idx
 
                     except Exception:
@@ -655,6 +635,8 @@ class DNALLMEmbedder:
             embeddings.flush()
             self._save_ensembl_metadata()  # Save what we have
             raise
+
+        return embeddings
 
     def _verify_saved_data(
         self,
@@ -712,9 +694,6 @@ class DNALLMEmbedder:
 
     def _finalize_embeddings(
         self,
-        species: str,
-        dna_llm: str,
-        dna_context_len: int,
         embeddings: np.memmap,
         embeddings_file: str,
     ) -> None:
@@ -723,33 +702,14 @@ class DNALLMEmbedder:
         Resizes the memory-mapped array if necessary and saves metadata.
 
         Args:
-            species (str): Species name
-            dna_llm (str): Name of DNA language model
-            dna_context_len (int): Context length for DNA sequences
             embeddings (np.memmap): Memory-mapped array of embeddings
-            embeddings_file (str): Path to embeddings file
+            embeddings_file (Path): Path to embeddings file
 
         """
         embeddings.flush()
-        if (
-            len(self.ensembl_metadata_dict[species][dna_llm][dna_context_len])
-            < embeddings.shape[0]
-        ):
-            embeddings_file = Path(embeddings_file)
-            new_embeddings = np.memmap(
-                embeddings_file,
-                dtype="float32",
-                mode="r+",
-                shape=(
-                    len(self.ensembl_metadata_dict[species][dna_llm][dna_context_len]),
-                    embeddings.shape[1],
-                ),
-            )
-            new_embeddings[:] = embeddings[
-                : len(self.ensembl_metadata_dict[species][dna_llm][dna_context_len])
-            ]
-            new_embeddings.flush()
-            embeddings_file.rename(embeddings_file.with_suffix("").with_suffix(".mmap"))
+
+        # Rename the temp file to the permanent .mmap
+        embeddings_file.rename(embeddings_file.with_suffix("").with_suffix(".mmap"))
 
         self._save_ensembl_metadata()
 
@@ -974,7 +934,7 @@ class GenomicSequenceDataset(Dataset):
 
         Returns:
             Dict[str, Union[str, torch.Tensor]]: Dictionary containing:
-                - location (str): Genomic location
+                - location (str): Genomic location in the format "chr:position"
                 - sequence (str): DNA sequence at that location
 
         Raises:
@@ -1023,19 +983,19 @@ def collate_sequences(
     batch: list[dict[str, str]],
     tokenizer: PreTrainedTokenizer,
 ) -> dict[str, list[str] | torch.Tensor]:
-    """Collate function for sequence batches.
+    """Collate function to turn a list of samples into a single batch.
 
     Args:
         batch (List[Dict[str, str]]): List of dictionaries containing:
-            - location (str): Genomic location
-            - sequence (str): DNA sequence
+            - location (str): Genomic location in the format "chr:position"
+            - sequence (str): DNA sequence at that location
         tokenizer (PreTrainedTokenizer): HuggingFace tokenizer
 
     Returns:
         Dict[str, Union[List[str], torch.Tensor]]: Dictionary containing:
-            - locations (List[str]): List of genomic locations
-            - input_ids (torch.Tensor): Tokenized sequences
-            - attention_mask (torch.Tensor): Attention mask for sequences
+            - locations (List[str]): List of genomic locations, with length bs
+            - input_ids (torch.Tensor): Tokenized sequences, (bs, seq_len)
+            - attention_mask (torch.Tensor): Attention mask for sequences, (bs, seq_len)
 
     """
     # Extract locations and sequences

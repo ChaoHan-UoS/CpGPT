@@ -68,10 +68,7 @@ def create_hic_attention_mask(
 
     # Expand for multiple heads
     attn_mask = attn_mask.unsqueeze(1).expand(-1, num_heads, -1, -1) * slopes.view(
-        1,
-        num_heads,
-        1,
-        1,
+        1, num_heads, 1, 1
     )
     return attn_mask.reshape(batch_size * num_heads, seq_length, seq_length)
 

@@ -73,7 +73,8 @@ callbacks:
 strict_load: false
 
 # Path to pretrained model checkpoint (or train from scratch)
-model_ckpt_path: ${paths.dependencies_dir}/model/weights/small.ckpt
+#model_ckpt_path: ${paths.dependencies_dir}/model/weights/small.ckpt
+model_ckpt_path: null
 
 # ===== Hydra Configuration =====
 hydra:

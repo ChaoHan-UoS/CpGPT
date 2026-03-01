@@ -165,7 +165,9 @@ class CpGPTLitModule(LightningModule):
         self.val_loss_best(loss)  # update best so far val loss
         # log `val_loss_best` as a value through `.compute()` method, instead of as a metric object
         # otherwise metric would be reset by lightning after each epoch
-        self.log("val/loss_best", self.val_loss_best.compute(), sync_dist=True, prog_bar=True)
+        self.log(
+            "val/loss_best", self.val_loss_best.compute(), sync_dist=True, prog_bar=True
+        )
         self.val_loss.reset()  # reset val loss for next epoch
 
     def on_predict_epoch_start(self) -> None:
@@ -332,7 +334,6 @@ class CpGPTLitModule(LightningModule):
 
         # 2.4: Initialize input masks for the generative process
         current_input_masks = self._initialize_input_masks(meth, mask_na, n_splits)
-        previous_input_masks = safe_clone(current_input_masks)
 
         # Step 3: Compute full data embedding for consistency loss (if enabled)
         if self.hparams.training["loss_weights"].get("consistency", 0.0) > 0.0:
@@ -408,14 +409,10 @@ class CpGPTLitModule(LightningModule):
                     mask_na=mask_na,
                     loss_inputs=loss_inputs,
                     current_input_masks=current_input_masks,
-                    previous_input_masks=previous_input_masks,
                     n_splits=n_splits,
                     total_steps=total_steps,
                     current_step=current_step,
                 )
-
-                # 4.9.2: Update previous input masks for next iteration
-                previous_input_masks = safe_clone(current_input_masks)
 
         # Step 5: Perform optimization step
         # 5.1: Check if we should perform optimizer step (end of accumulation or epoch)
@@ -439,14 +436,13 @@ class CpGPTLitModule(LightningModule):
 
     def validation_step(
         self,
-        batch: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
+        batch: dict[str, Any],
         batch_idx: int,
     ) -> None:
         """Perform a single validation step.
 
         Args:
-            batch (Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]):
-                Input batch tuple
+            batch (Dict[str, Any]): Input batch dictionary
             batch_idx (int): Batch index
 
         """
@@ -456,7 +452,9 @@ class CpGPTLitModule(LightningModule):
         # update and log metrics
         self.val_loss(loss)
         for key, value in loss_dict.items():
-            self.log(f"val/{key}", value, on_step=False, on_epoch=True, prog_bar=True)
+            self.log(
+                f"val/{key}", value, on_step=False, on_epoch=True, prog_bar=True
+            )
 
     def test_step(self, batch: dict[str, Any], batch_idx: int) -> None:
         """Perform a single test step.
@@ -472,7 +470,9 @@ class CpGPTLitModule(LightningModule):
         # update and log metrics
         self.test_loss(loss)
         for key, value in loss_dict.items():
-            self.log(f"test/{key}", value, on_step=False, on_epoch=True, prog_bar=True)
+            self.log(
+                f"test/{key}", value, on_step=False, on_epoch=True, prog_bar=True
+            )
 
     def _shared_val_step(self, batch: dict[str, Any]) -> dict[str, torch.Tensor]:
         """Perform a shared validation step.
@@ -1124,7 +1124,6 @@ class CpGPTLitModule(LightningModule):
         mask_na: torch.Tensor,
         loss_inputs: dict[str, Any],
         current_input_masks: torch.Tensor,
-        previous_input_masks: torch.Tensor,
         n_splits: int,
         total_steps: int,
         current_step: int,
@@ -1138,7 +1137,6 @@ class CpGPTLitModule(LightningModule):
             mask_na (torch.Tensor): Mask of missing values
             loss_inputs (Dict[str, Any]): Dictionary containing predictions
             current_input_masks (torch.Tensor): Current input masks tensor
-            previous_input_masks (torch.Tensor): Previous input masks tensor
             n_splits (int): Number of splits
             total_steps (int): Total training steps
             current_step (int): Current global step
@@ -1160,7 +1158,7 @@ class CpGPTLitModule(LightningModule):
         for i in range(batch_size):
             input_mask_i = current_input_masks[i]
             valid_site_mask = (~mask_na[i]) & (~input_mask_i)
-            site_errors = safe_clone(meth_error_weighted[i])
+            site_errors = meth_error_weighted[i]
             site_errors[~valid_site_mask] = float("-inf")
 
             # Calculate number of sites to unmask
@@ -1171,15 +1169,11 @@ class CpGPTLitModule(LightningModule):
                 current_input_masks[i][top_error_indices] = True
 
                 # Update meth with predicted values at newly unmasked sites
-                newly_unmasked = current_input_masks[i] & (~previous_input_masks[i])
                 update_prob = current_step / total_steps
                 if torch.rand(1).item() < update_prob:
-                    meth[i, newly_unmasked] = m_to_beta(pred_meth[i, newly_unmasked]).to(
-                        meth.dtype,
-                    )
+                    meth[i, top_error_indices] = m_to_beta(pred_meth[i, top_error_indices]).to(meth.dtype)
 
-        # Clone meth and current_input_masks to avoid errors with the computation graph
-        return safe_clone(meth), safe_clone(current_input_masks)
+        return meth, current_input_masks
 
     def _calculate_losses(
         self,
@@ -1189,14 +1183,14 @@ class CpGPTLitModule(LightningModule):
 
         Args:
             **kwargs: Dictionary containing any of the following:
-                - pred_meth (torch.Tensor): Predicted methylation values
-                - pred_meth_unc (torch.Tensor): Predicted uncertainty
                 - meth (torch.Tensor): Target values
                 - mask_na (torch.Tensor): Mask for NA values
                 - sample_embedding (torch.Tensor): Sample embeddings
                 - sample_embedding_full (torch.Tensor): Sample embeddings with full data
-                - obsm (torch.Tensor): Observation matrix
+                - pred_meth (torch.Tensor): Predicted methylation values
+                - pred_meth_unc (torch.Tensor): Predicted uncertainty
                 - pred_conditions (torch.Tensor): Predicted conditions
+                - obsm (torch.Tensor): Observation matrix
                 - noise (torch.Tensor): Input noise for diffusion
                 - pred_noise (torch.Tensor): Predicted noise
                 - loss_mask (torch.Tensor): Mask for loss calculation
@@ -1224,7 +1218,10 @@ class CpGPTLitModule(LightningModule):
         pred_meth = kwargs.get("pred_meth")
         pred_meth_unc = kwargs.get("pred_meth_unc")
         if pred_meth is not None and meth is not None:
-            losses["m_mae"] = F.l1_loss(pred_meth[valid_mask], beta_to_m(meth[valid_mask])).mean()
+            losses["m_mae"] = F.l1_loss(
+                pred_meth[valid_mask],
+                beta_to_m(meth[valid_mask])
+            ).mean()
             losses["m_mae_unc"] = F.l1_loss(
                 F.l1_loss(pred_meth[valid_mask], beta_to_m(meth[valid_mask]), reduction="none"),
                 pred_meth_unc[valid_mask],
@@ -1243,7 +1240,10 @@ class CpGPTLitModule(LightningModule):
                 m_to_beta(pred_meth[valid_mask]),
                 meth[valid_mask],
             ).mean()
-            losses["betas_wd"] = wd_loss(m_to_beta(pred_meth[valid_mask]), meth[valid_mask]).mean()
+            losses["betas_wd"] = wd_loss(
+                m_to_beta(pred_meth[valid_mask]),
+                meth[valid_mask]
+            ).mean()
 
         # Calculate embedding losses if available
         sample_embedding = kwargs.get("sample_embedding")

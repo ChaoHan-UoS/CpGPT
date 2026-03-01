@@ -19,12 +19,12 @@ class CpGPTDataset(Dataset):
     integrates with different DNA language models.
 
     Attributes:
+        embedder (DNALLMEmbedder): Instance of DNALLMEmbedder for handling embeddings.
         processed_dir (str): Directory containing processed data files.
         max_length (int): Maximum number of CpG sites to include per sample.
         sorting_strategy (str): Strategy for sorting CpG sites.
         dna_context_len (int): Context length for DNA sequences.
         dna_llm (str): Name of the DNA language model to use.
-        embedder (DNALLMEmbedder): Instance of DNALLMEmbedder for handling embeddings.
         logger: Logger instance for this class.
         dataset_metrics (Dict): Metrics for each dataset file.
         data_paths (List[str]): List of paths to dataset files.
@@ -130,24 +130,24 @@ class CpGPTDataset(Dataset):
         - original: Keep original order
 
         Args:
-            X (np.ndarray): CpG methylation data array
-            var (np.ndarray): Genomic variant information array
+            X (np.ndarray): CpG methylation data array, (n_samples, n_cpg_sites)
+            var (np.ndarray): Genomic variant information array, (n_cpg_sites, 2)
 
         Returns:
             Tuple[np.ndarray, np.ndarray]: Tuple containing:
-                - X: Sorted methylation data array
-                - var: Sorted variant information array
+                - X: Sorted methylation data array along the CpG site dimension
+                - var: Sorted variant information array along the CpG site dimension
 
         """
         if "chromosome" in self.sorting_strategy:
             chroms = var[:, 0]
             positions = var[:, 1]
 
-            unique_chroms, chrom_indices = np.unique(chroms, return_inverse=True)
+            unique_chroms = np.unique(chroms)
 
             sorted_indices = []
             for chrom in unique_chroms:
-                chrom_mask = chrom_indices == np.where(unique_chroms == chrom)[0][0]
+                chrom_mask = chroms == chrom
                 chrom_positions = positions[chrom_mask]
                 if "sorted" in self.sorting_strategy:
                     sorted_chrom_indices = np.argsort(chrom_positions)
@@ -182,10 +182,10 @@ class CpGPTDataset(Dataset):
 
         Args:
             species (str): Ensembl species name
-            var (np.ndarray): Array containing chromosome and position information
+            var (np.ndarray): Array containing chromosome and position information, (n_cpg_sites, 2)
 
         Returns:
-            np.ndarray: Array of DNA embeddings for the given positions
+            np.ndarray: Array of DNA embeddings for the given positions, (n_cpg_sites, embed_size)
 
         Raises:
             FileNotFoundError: If DNA embeddings file is missing
@@ -248,9 +248,7 @@ class CpGPTDataset(Dataset):
             self.logger.error(error_msg)
             raise FileNotFoundError(error_msg)
 
-        embeddings_index_dict = self.embedder.ensembl_metadata_dict[species][self.dna_llm][
-            self.dna_context_len
-        ]
+        embeddings_index_dict = self.embedder.ensembl_metadata_dict[species][self.dna_llm][self.dna_context_len]
 
         try:
             embeddings = np.memmap(
@@ -272,7 +270,7 @@ class CpGPTDataset(Dataset):
 
         try:
             embedding_indices = [
-                embeddings_index_dict[f"{reverse_vocab_dict[chrom]}:{pos}"] for chrom, pos in var
+                embeddings_index_dict[f"{reverse_vocab_dict[chrom_index]}:{pos}"] for chrom_index, pos in var
             ]
         except KeyError as e:
             # Provide more helpful error for missing genomic locations
@@ -308,10 +306,10 @@ class CpGPTDataset(Dataset):
 
         Returns:
             Dict[str, Union[torch.Tensor, Optional[torch.Tensor]]]: Dictionary containing:
-                - meth (torch.Tensor): CpG methylation data
-                - dna_embeddings (torch.Tensor): DNA embeddings
-                - chroms (torch.Tensor): Chromosome indices
-                - positions (torch.Tensor): Genomic positions
+                - meth (torch.Tensor): CpG methylation data, (n_cpg_sites, )
+                - dna_embeddings (torch.Tensor): DNA embeddings, (n_cpg_sites, embed_size)
+                - chroms (torch.Tensor): Chromosome indices, (n_cpg_sites, )
+                - positions (torch.Tensor): Genomic positions, (n_cpg_sites, )
                 - obsm (Optional[torch.Tensor]): Additional observation matrix if available
 
         Raises:
@@ -392,7 +390,7 @@ class CpGPTDataset(Dataset):
                 embeddings = torch.tensor(embeddings, dtype=torch.float32)
                 obsm = torch.tensor(obsm, dtype=torch.float32) if obsm is not None else None
 
-                # Split var into chrom and pos
+                # Split var into chrom idx and pos
                 chroms = var[:, 0]
                 positions = var[:, 1]
 

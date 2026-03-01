@@ -203,17 +203,17 @@ def patch_attention(m: nn.Module) -> None:
 
 
 def safe_clone(tensor: torch.Tensor) -> torch.Tensor:
-    """Safely clone a tensor only if it requires gradient.
+    """Safely clone a tensor and detach it from the computation graph.
 
-    This function optimizes memory usage by only cloning tensors that require gradients.
-    For tensors that don't require gradients, it returns the original tensor.
+    This function creates a copy of the tensor to preserve its values from
+    in-place modifications. The cloned tensor is detached to prevent unintended
+    gradient flow back to the original tensor.
 
     Args:
-        tensor (torch.Tensor): The input tensor to potentially clone.
+        tensor (torch.Tensor): The input tensor to clone.
 
     Returns:
-        torch.Tensor: A cloned tensor if the input requires gradients,
-            otherwise the original tensor.
+        torch.Tensor: A cloned and detached copy of the input tensor.
 
     """
-    return tensor.clone() if tensor.requires_grad else tensor
+    return tensor.clone().detach()

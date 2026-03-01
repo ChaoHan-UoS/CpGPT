@@ -9,6 +9,7 @@ import rich.tree
 from hydra.core.hydra_config import HydraConfig
 from lightning_utilities.core.rank_zero import rank_zero_only
 from omegaconf import DictConfig, OmegaConf, open_dict
+from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.table import Table
@@ -81,13 +82,16 @@ def print_config_tree(
 
         branch.add(rich.syntax.Syntax(branch_content, "yaml"))
 
-    # print config tree
-    rich.print(tree)
+    # print config tree to console with wide width to prevent truncation
+    console = Console(width=120)
+    console.print(tree)
 
     # save config tree to file
     if save_to_file:
         with open(Path(cfg.paths.output_dir, "config_tree.log"), "w") as file:
-            rich.print(tree, file=file)
+            # Use wide console without terminal codes for clean file output
+            file_console = Console(file=file, width=200, force_terminal=False, no_color=True)
+            file_console.print(tree)
 
 
 @rank_zero_only

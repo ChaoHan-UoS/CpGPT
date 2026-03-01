@@ -38,8 +38,8 @@ class CpGPTDataModule(LightningDataModule):
             test_dir (Optional[str]): Directory containing test data. Defaults to None.
             predict_dir (Optional[str]): Directory containing prediction data. Defaults to None.
             dependencies_dir (str): Directory for model dependencies. Defaults to "dependencies".
-            batch_size (int): Batch size for dataloaders. Defaults to 4.
-            num_workers (int): Number of workers for data loading. Defaults to 4.
+            batch_size (int): Total batch size for dataloaders. Defaults to 4.
+            num_workers (int): Number of workers per device for data loading. Defaults to 4.
             max_length (int): Maximum sequence length. Defaults to 10000.
             dna_llm (str): DNA language model name. Defaults to
                 "nucleotide-transformer-v2-500m-multi-species".
@@ -102,9 +102,7 @@ class CpGPTDataModule(LightningDataModule):
                     f"Batch size ({self.hparams.batch_size}) is not divisible by the "
                     f"number of devices ({self.trainer.world_size})."
                 )
-                raise RuntimeError(
-                    msg,
-                )
+                raise RuntimeError(msg)
             self.batch_size_per_device = self.hparams.batch_size // self.trainer.world_size
 
         # Load datasets

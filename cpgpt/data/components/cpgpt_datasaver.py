@@ -523,7 +523,7 @@ class CpGPTDataSaver:
 
         # Update the global set of genomic locations
         if species not in self.all_genomic_locations:
-            self.all_genomic_locations[species] = set()
+            self.all_genomic_locations[species] = set()  # unordered
         new_locations = set(metrics["genomic_locations"]) - self.all_genomic_locations[species]
         self.all_genomic_locations[species].update(new_locations)
 

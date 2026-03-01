@@ -397,10 +397,7 @@ class CpGPT(nn.Module):
             locus_embeddings = self.absolute_position_encoder(sequence_embeddings, positions)
             batch_size, seq_len, _ = locus_embeddings.shape
             locus_embeddings = locus_embeddings.view(
-                batch_size,
-                seq_len,
-                self.n_attention_heads,
-                -1,
+                batch_size, seq_len, self.n_attention_heads, -1
             ).transpose(1, 2)
             locus_embeddings = self.position_encoder(locus_embeddings)
             locus_embeddings = (
@@ -526,8 +523,7 @@ class CpGPT(nn.Module):
         """
         # Stack all condition tokens and process them in parallel
         stacked_tokens = torch.stack(
-            list(self.condition_tokens),
-            dim=1,
+            list(self.condition_tokens), dim=1
         )  # Shape: (1, num_conditions, d_embedding)
         processed_tokens = self.condition_decoder(
             stacked_tokens,
@@ -535,10 +531,8 @@ class CpGPT(nn.Module):
 
         # Expand across the batch dimension
         condition_tokens = processed_tokens.expand(
-            sample_embedding.size(0),
-            -1,
-            -1,
-        )  # Shape: (batch_size, num_conditions, embed_dim)
+            sample_embedding.size(0), -1, -1
+        )  # Shape: (batch_size, num_conditions, d_embedding)
 
         # Perform batch matrix multiplication
         return torch.bmm(condition_tokens, sample_embedding.unsqueeze(2)).squeeze(2)
